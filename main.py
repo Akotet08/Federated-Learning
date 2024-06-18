@@ -122,7 +122,7 @@ model = MyModel(3).to(args.device)
 pbar = tqdm(range(args.round))
 for round in pbar:
     subset = np.random.choice(nclients, m, replace=False)
-    old_params = model.state_dict()
+    old_params = copy.deepcopy(model.state_dict())
     cur_params = {}
 
     acc_loss = 0
