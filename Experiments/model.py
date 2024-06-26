@@ -31,8 +31,8 @@ args.drop = None if args.drop < 0 else args.drop
 
 print(args)
 
-train_df = pd.read_csv('wesad_processed/wesad_train_scaled.csv')
-test_df = pd.read_csv('wesad_processed/wesad_test_scaled.csv')
+train_df = pd.read_csv('../data/wesad_processed/wesad_train_scaled.csv')
+test_df = pd.read_csv('../data/wesad_processed/wesad_test_scaled.csv')
 
 def load_dataset(drop_index = None):    
     X_train, y_train = train_df.iloc[:, :-2].to_numpy(), train_df['label'].to_numpy()
