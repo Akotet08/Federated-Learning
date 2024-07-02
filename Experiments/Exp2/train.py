@@ -16,62 +16,66 @@ from utils import wesad_get_groups, simulate_missing_modality
 torch.manual_seed(42)
 np.random.seed(42)
 
-parser = argparse.ArgumentParser(description='pipline')
 
-parser.add_argument('--device', '-d', type=int, default=0, help="Which gpu to use; default cpu")
-parser.add_argument('--batch_size', type=int, default=64, help="batch size")
-parser.add_argument('--epoch', type=int, default=10, help="epoch")
-parser.add_argument('--lr', type=float, default=0.01, help='learning rate')
-parser.add_argument('-p', type=float, default=1, help='modality sampling')
-parser.add_argument('-drop', type=int, default=-1, help='id of modality to drop')
+def parse_arguments():
+    parser = argparse.ArgumentParser(description='pipline')
+
+    parser.add_argument('--device', '-d', type=int, default=0, help="Which gpu to use; default cpu")
+    parser.add_argument('--batch_size', type=int, default=64, help="batch size")
+    parser.add_argument('--epoch', type=int, default=500, help="epoch")
+    parser.add_argument('--lr', type=float, default=0.01, help='learning rate')
+    parser.add_argument('-p', type=float, default=1, help='modality sampling')
+    parser.add_argument('-drop', type=int, default=-1, help='id of modality to drop')
 
 
-args = parser.parse_args()
-args.device = 'cpu' if args.device < 0 else torch.device(f"cuda:{args.device}")
-args.drop = None if args.drop < 0 else args.drop
+    args = parser.parse_args()
+    args.device = 'cpu' if args.device < 0 else torch.device(f"cuda:{args.device}")
+    args.drop = None if args.drop < 0 else args.drop
 
-print(args)
+    print(args)
 
-train_df = pd.read_csv('/home/akotet/FL/data/wesad_processed/wesad_train_scaled.csv')
-test_df = pd.read_csv('/home/akotet/FL/data/wesad_processed/wesad_test_scaled.csv')
+    return args
 
-def load_dataset(run_idx=1, ngroups = 220, p=0.5):    
+def load_dataset(run_idx=1, ngroups = 2, p=0.5):    
+    '''
+        train and test_grouped, preprocessed data with 10 sec non overlapping window
+    '''
+    train_df = pd.read_csv('/home/akotet/FL/data/wesad_processed/wesad_train_grouped.csv')
+    test_df = pd.read_csv('/home/akotet/FL/data/wesad_processed/wesad_test_grouped.csv')
+
     train_groups = wesad_get_groups(train_df, ngroup=ngroups)
     test_groups = wesad_get_groups(test_df, ngroup=ngroups)
 
     train_groups_info = simulate_missing_modality(train_groups, run_idx=run_idx, p=p)
     test_groups_info = simulate_missing_modality(test_groups, run_idx=run_idx, p=p)
 
-    for g in train_groups_info.keys():
-        idxes  = train_groups_info[g]['indexes']
-        missing = train_groups_info[g]['missing_modalities']
+    y_train = train_df['label'].to_numpy()  
+    X_train = train_df.drop(columns=['label', 'user_id'], axis=1).to_numpy()
+    y_test = test_df['label'].to_numpy()
+    X_test = test_df.drop(columns=['label', 'user_id'], axis=1).to_numpy()
 
-        cols = train_df.columns
+    X_train = X_train.astype(np.float32).reshape(-1, 10, 40)
+    X_test = X_test.astype(np.float32).reshape(-1, 10, 40)
 
-        #simulate missing modalities from train
-        for m in range(len(missing)):
-            if missing[m] == 1:
-                train_df.loc[idxes, cols[m]] = 0
-    
-    # for g in test_groups_info.keys():
-    #     idxes  = test_groups_info[g]['indexes']
-    #     missing = test_groups_info[g]['missing_modalities']
-
-    #     cols = test_df.columns
+    # for g in train_groups_info.keys():
+    #     idxes  = train_groups_info[g]['indexes']
+    #     missing = train_groups_info[g]['missing_modalities']
 
     #     #simulate missing modalities from train
     #     for m in range(len(missing)):
-    #         if missing[m] == 1:
-    #             test_df.loc[idxes, cols[m]] = 0
-                
-    X_train, y_train = train_df.iloc[:, :-2].to_numpy(), train_df['label'].to_numpy()
-    X_test, y_test = test_df.iloc[:, :-2].to_numpy(), test_df['label'].to_numpy()
+    #         if missing[m] == 1 and g != 0: # g != 0 to create full dataset for first group 
+    #             X_train[idxes, m, :] = 0
+
+    for g in test_groups_info.keys():
+        idxes  = test_groups_info[g]['indexes']
+        missing = test_groups_info[g]['missing_modalities']
+
+        #simulate missing modalities from train
+        for m in range(len(missing)):
+            if missing[m] == 1 and g!=0:
+                X_test[idxes, m, :] = 0
 
     print(" ..reading instances: train {0}, test {1}".format(X_train.shape, X_test.shape))
-
-    X_train = X_train.astype(np.float32)
-    X_test = X_test.astype(np.float32)
-
     # The targets are casted to int8 for GPU compatibility.
     y_train = y_train.astype(np.uint8)
     y_test = y_test.astype(np.uint8)
@@ -102,7 +106,7 @@ class CNNLSTM(nn.Module):
         self.dropout = nn.Dropout(drop_prob)
     
     def forward(self, x, hidden, batch_size):
-        x = x.view(-1, 10, 1)
+        # x = x.view(-1, 10, 1)
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
@@ -226,16 +230,16 @@ def train(net, epochs=10, batch_size=125, lr=0.01):
             
         net.train() # reset to train mode after iterationg through validation data
                 
-        print("Epoch: {}/{}...".format(e+1, epochs),
-        "Train Loss: {:.4f}...".format(np.mean(train_losses)),
-        "Val Loss: {:.4f}...".format(np.mean(val_losses)),
-        "Val Acc: {:.4f}...".format(accuracy/(len(X_test)//batch_size)),
-        "F1-Score: {:.4f}...".format(f1score/(len(X_test)//batch_size)))
+        # print("Epoch: {}/{}...".format(e+1, epochs),
+        # "Train Loss: {:.4f}...".format(np.mean(train_losses)),
+        # "Val Loss: {:.4f}...".format(np.mean(val_losses)),
+        # "Val Acc: {:.4f}...".format(accuracy/(len(X_test)//batch_size)),
+        # "F1-Score: {:.4f}...".format(f1score/(len(X_test)//batch_size)))
 
-        # run.log({'Train Loss': np.mean(train_losses), 
-        #          'Val loss' : np.mean(val_losses), 
-        #          'Val acc': accuracy/(len(X_test)//batch_size), 
-        #          'F1-Score': f1score/(len(X_test)//batch_size)})
+        run.log({'Train Loss': np.mean(train_losses), 
+                 'Val loss' : np.mean(val_losses), 
+                 'Val acc': accuracy/(len(X_test)//batch_size), 
+                 'F1-Score': f1score/(len(X_test)//batch_size)})
 
     return ({'Train Loss': np.mean(train_losses), 
             'Val loss' : np.mean(val_losses), 
@@ -244,13 +248,20 @@ def train(net, epochs=10, batch_size=125, lr=0.01):
 
 
 if __name__ == '__main__':
-    X_train, y_train, X_test, y_test = load_dataset(run_idx=1, p = args.p)
+    args = parse_arguments()
 
-    for i in range(5):
+    run = wandb.init(project=f'Experiment (centralized grouped) missing test only', 
+        config= {key: value for key, value in vars(args).items()}
+        )
+    
+    for i in range(1):
+        X_train, y_train, X_test, y_test = load_dataset(run_idx=i*2000, p = args.p)
+
         model = CNNLSTM()
         model.apply(init_weights)   
 
         stat = train(model, epochs=args.epoch, batch_size=args.batch_size, lr=args.lr)
+        print(stat)
         # # save model
         # path = 'models/'
         # torch.save(model.state_dict(), path + f'removed_{args.drop}_{i}')

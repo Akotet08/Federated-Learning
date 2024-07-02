@@ -35,7 +35,6 @@ run = wandb.init(project="fl-flow",
             }
         )
 
-
 class Client():
     def __init__(self, client_number, dataset, model, B, E, idxes, lr = 0.01, device='cpu'):
         self.client_number = client_number

@@ -18,8 +18,8 @@ np.random.seed(42)
 parser = argparse.ArgumentParser(description='pipline')
 
 parser.add_argument('--device', '-d', type=int, default=0, help="Which gpu to use; default cpu")
-parser.add_argument('--batch_size', type=int, default=32, help="batch size")
-parser.add_argument('--epoch', type=int, default=10, help="epoch")
+parser.add_argument('--batch_size', type=int, default=16, help="batch size")
+parser.add_argument('--epoch', type=int, default=100, help="epoch")
 parser.add_argument('--lr', type=float, default=0.01, help='learning rate')
 parser.add_argument('-p', type=float, default=1, help='modality sampling')
 parser.add_argument('-drop', type=int, default=-1, help='id of modality to drop')
@@ -31,12 +31,61 @@ args.drop = None if args.drop < 0 else args.drop
 
 print(args)
 
-train_df = pd.read_csv('../data/wesad_processed/wesad_train_scaled.csv')
-test_df = pd.read_csv('../data/wesad_processed/wesad_test_scaled.csv')
+def get_windowed_features(curr_df):
+    WIN_LEN = 40 # 10 secs
+    FEAT_IDX_START = 0
+    FEAT_IDX_END = 9
+
+    windowed_features = []
+    windowed_labels = []
+    window_start_idx= 0
+    while window_start_idx < len(curr_df):
+        window_end_idx = (window_start_idx) + WIN_LEN
+        if window_end_idx >= len(curr_df):
+            break
+        # print(f'[{idx}/N], window_start_idx: {window_start_idx}, window_end_idx: {window_end_idx}')
+        feature_window = curr_df.iloc[window_start_idx:window_end_idx, FEAT_IDX_START:FEAT_IDX_END + 1].values
+        feature_window = feature_window.T
+        
+        # define lables for window
+        label_window= curr_df.iloc[window_start_idx:window_end_idx, :]['label']
+        if label_window.nunique() == 1:
+            windowed_features.append(feature_window)
+            windowed_labels.append(label_window.iloc[0])
+        window_start_idx = window_end_idx
+
+    return np.array(windowed_features), np.array(windowed_labels)
 
 def load_dataset(drop_index = None):    
-    X_train, y_train = train_df.iloc[:, :-2].to_numpy(), train_df['label'].to_numpy()
-    X_test, y_test = test_df.iloc[:, :-2].to_numpy(), test_df['label'].to_numpy()
+    train_path_dir = '../../data/wesad_processed/wesad_train_scaled.csv'
+    test_path_dir = '../../data/wesad_processed/wesad_test_scaled.csv'
+
+    train_df = pd.read_csv(train_path_dir)
+    test_df = pd.read_csv(test_path_dir)
+
+    X_train, y_train, X_test, y_test = [], [], [], []
+    user_id_train, user_id_test = [], []
+
+    clients = train_df['user_id'].unique()
+    for cli in clients:
+        df_train = train_df[train_df['user_id'] == cli]
+        df_test = test_df[test_df['user_id'] == cli]
+
+        feat, label = get_windowed_features(df_train)
+        X_train.append(feat)
+        y_train.append(label)
+
+        feat, label = get_windowed_features(df_test)
+        X_test.append(feat)
+        y_test.append(label)
+        
+        user_id_train.append([cli] * len(X_train))
+        user_id_test.append([cli] * len(X_test))
+    
+    X_train = np.concatenate(X_train)
+    y_train = np.concatenate(y_train)
+    X_test = np.concatenate(X_test)
+    y_test = np.concatenate(y_test)
 
     print(" ..reading instances: train {0}, test {1}".format(X_train.shape, X_test.shape))
 
@@ -72,11 +121,10 @@ class CNNLSTM(nn.Module):
         self.lstm2  = nn.LSTM(n_hidden, n_hidden, n_layers)
         
         self.fc = nn.Linear(n_hidden, n_classes)
-
         self.dropout = nn.Dropout(drop_prob)
     
     def forward(self, x, hidden, batch_size):
-        x = x.view(-1, 10, 1)
+        # x = x.view(-1, 10, 1)
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
@@ -91,7 +139,6 @@ class CNNLSTM(nn.Module):
         x = self.fc(x)
         
         out = x.view(batch_size, -1, self.n_classes)[:,-1,:]
-        
         return out, hidden
     
     def init_hidden(self, batch_size, gpu=True):
@@ -137,15 +184,15 @@ def init_weights(m):
 
 train_on_gpu = torch.cuda.is_available()
 
-def train(net, epochs=10, batch_size=125, lr=0.01):
+def train(X_train, y_train, X_test, y_test, net, epochs=10, batch_size=125, lr=0.01):
     
-    opt = torch.optim.SGD(net.parameters(), lr=lr, momentum=0.9, weight_decay=1e-4)
+    opt = torch.optim.SGD(net.parameters(), lr=lr, momentum=0.9, weight_decay=1e-3)
     criterion = nn.CrossEntropyLoss()
     
     if(train_on_gpu):
         net.to(args.device)
 
-    for e in range(epochs):
+    for e in tqdm(range(epochs)):
         # initialize hidden state
         h = net.init_hidden(batch_size)         
         train_losses = []    
@@ -200,11 +247,11 @@ def train(net, epochs=10, batch_size=125, lr=0.01):
             
         net.train() # reset to train mode after iterationg through validation data
                 
-        print("Epoch: {}/{}...".format(e+1, epochs),
-        "Train Loss: {:.4f}...".format(np.mean(train_losses)),
-        "Val Loss: {:.4f}...".format(np.mean(val_losses)),
-        "Val Acc: {:.4f}...".format(accuracy/(len(X_test)//batch_size)),
-        "F1-Score: {:.4f}...".format(f1score/(len(X_test)//batch_size)))
+        # print("Epoch: {}/{}...".format(e+1, epochs),
+        # "Train Loss: {:.4f}...".format(np.mean(train_losses)),
+        # "Val Loss: {:.4f}...".format(np.mean(val_losses)),
+        # "Val Acc: {:.4f}...".format(accuracy/(len(X_test)//batch_size)),
+        # "F1-Score: {:.4f}...".format(f1score/(len(X_test)//batch_size)))
 
         # run.log({'Train Loss': np.mean(train_losses), 
         #          'Val loss' : np.mean(val_losses), 
@@ -224,8 +271,9 @@ if __name__ == '__main__':
         model = CNNLSTM()
         model.apply(init_weights)   
 
-        stat = train(model, epochs=args.epoch, batch_size=args.batch_size, lr=args.lr)
+        stat = train(X_train, y_train, X_test, y_test, model, epochs=args.epoch, batch_size=args.batch_size, lr=args.lr)
 
+        print(stat)
         # save model
         path = 'models/'
         torch.save(model.state_dict(), path + f'removed_{args.drop}_{i}')

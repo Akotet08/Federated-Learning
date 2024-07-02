@@ -1,0 +1,35 @@
+######### Training dataset Statistics #########
+		Label 0 	Label 1 	Label 2 	
+S10 	13 min 		8 min 		4 min 		
+S11 	13 min 		7 min 		4 min 		
+S13 	13 min 		7 min 		4 min 		
+S14 	13 min 		7 min 		4 min 		
+S15 	13 min 		8 min 		4 min 		
+S16 	13 min 		7 min 		4 min 		
+S17 	13 min 		8 min 		4 min 		
+S02 	13 min 		7 min 		4 min 		
+S03 	13 min 		7 min 		4 min 		
+S04 	13 min 		7 min 		4 min 		
+S05 	13 min 		7 min 		4 min 		
+S06 	13 min 		7 min 		4 min 		
+S07 	13 min 		7 min 		4 min 		
+S08 	13 min 		7 min 		4 min 		
+S09 	13 min 		7 min 		4 min 		
+
+######### Test dataset Statistics #########
+		Label 0 	Label 1 	Label 2 	
+S10 	5 min 		3 min 		1 min 		
+S11 	5 min 		3 min 		1 min 		
+S13 	5 min 		3 min 		1 min 		
+S14 	5 min 		3 min 		1 min 		
+S15 	5 min 		3 min 		1 min 		
+S16 	5 min 		3 min 		1 min 		
+S17 	5 min 		3 min 		1 min 		
+S02 	5 min 		3 min 		1 min 		
+S03 	5 min 		3 min 		1 min 		
+S04 	5 min 		3 min 		1 min 		
+S05 	6 min 		3 min 		1 min 		
+S06 	5 min 		3 min 		1 min 		
+S07 	5 min 		3 min 		1 min 		
+S08 	5 min 		3 min 		1 min 		
+S09 	5 min 		3 min 		1 min 		

@@ -19,8 +19,8 @@ np.random.seed(42)
 parser = argparse.ArgumentParser(description='pipline')
 
 parser.add_argument('--device', '-d', type=int, default=0, help="Which gpu to use; default cpu")
-parser.add_argument('--batch_size', type=int, default=64, help="batch size")
-parser.add_argument('--epoch', type=int, default=10, help="epoch")
+parser.add_argument('--batch_size', type=int, default=16, help="batch size")
+parser.add_argument('--epoch', type=int, default=100, help="epoch")
 parser.add_argument('--lr', type=float, default=0.01, help='learning rate')
 parser.add_argument('-p', type=float, default=1, help='modality sampling')
 parser.add_argument('-drop', type=int, default=-1, help='id of modality to drop')
@@ -32,12 +32,47 @@ args.drop = None if args.drop < 0 else args.drop
 
 print(args)
 
-train_df = pd.read_csv('../data/wesad_processed/wesad_train_scaled.csv')
-test_df = pd.read_csv('../data/wesad_processed/wesad_test_scaled.csv')
+def get_windowed_features(curr_df):
+    WIN_LEN = 40 # 10 secs
+    FEAT_IDX_START = 0
+    FEAT_IDX_END = 9
 
+    windowed_features = []
+    windowed_labels = []
+    window_start_idx= 0
+    while window_start_idx < len(curr_df):
+        window_end_idx = (window_start_idx) + WIN_LEN
+        if window_end_idx >= len(curr_df):
+            break
+        # print(f'[{idx}/N], window_start_idx: {window_start_idx}, window_end_idx: {window_end_idx}')
+        feature_window = curr_df.iloc[window_start_idx:window_end_idx, FEAT_IDX_START:FEAT_IDX_END + 1].values
+        feature_window = feature_window.T
+        
+        # define lables for window
+        label_window= curr_df.iloc[window_start_idx:window_end_idx, :]['label']
+        if label_window.nunique() == 1:
+            windowed_features.append(feature_window)
+            windowed_labels.append(label_window.iloc[0])
+        window_start_idx = window_end_idx
+
+    return np.array(windowed_features), np.array(windowed_labels)
+
+test_path_dir = '../../data/wesad_processed/wesad_test_scaled.csv'
+test_df = pd.read_csv(test_path_dir)
 def load_dataset(drop_index = None):    
-    X_test, y_test = test_df.iloc[:, :-2].to_numpy(), test_df['label'].to_numpy()
+    X_test, y_test = [], []
 
+    clients = test_df['user_id'].unique()
+    for cli in clients:
+        df_test = test_df[test_df['user_id'] == cli]
+
+        feat, label = get_windowed_features(df_test)
+        X_test.append(feat)
+        y_test.append(label)
+    
+    X_test = np.concatenate(X_test)
+    y_test = np.concatenate(y_test)
+    
     X_test = X_test.astype(np.float32)
 
     # The targets are casted to int8 for GPU compatibility.
@@ -48,8 +83,8 @@ def load_dataset(drop_index = None):
 
     return X_test, y_test
 
-run = wandb.init(project='Experiment (single det. drop third) ', 
-                 config= {key: value for key, value in vars(args).items()})
+# run = wandb.init(project='Experiment (single det. drop third) ', 
+#                  config= {key: value for key, value in vars(args).items()})
 
 def iterate_minibatches(inputs, targets, batchsize, shuffle=True):
     assert len(inputs) == len(targets)
@@ -70,11 +105,8 @@ train_on_gpu = torch.cuda.is_available()
 criterion = nn.CrossEntropyLoss()
 
 ### for modeling Test time only removal
-# net = CNNLSTM()
-# net.load_state_dict(torch.load(path + f'removed_{None}'))
-
 stats = []
-for modalitiy in range(1):
+for modalitiy in range(10):
     X_test, y_test = load_dataset(None) 
     
     val_losses = []
@@ -83,7 +115,7 @@ for modalitiy in range(1):
 
     for i in range(5):
         net = CNNLSTM()
-        net.load_state_dict(torch.load(path + f'removed_None_{i}'))
+        net.load_state_dict(torch.load(path + f'removed_{None}_{i}'))
         net = net.to(args.device)
         val_h = net.init_hidden(batch_size)
         net.eval()
@@ -108,22 +140,22 @@ for modalitiy in range(1):
                 accuracy += torch.mean(equals.type(torch.FloatTensor))
                 f1score += metrics.f1_score(top_class.cpu(), targets.view(*top_class.shape).long().cpu(), average='weighted')
                 
-    print("Val Loss: {:.4f}...".format(np.mean(val_losses)),
-    "Val Acc: {:.4f}...".format(accuracy/(len(X_test)//batch_size)/5),
-    "F1-Score: {:.4f}...".format(f1score/(len(X_test)//batch_size)/5),
-    'removed modality during test {}'.format(train_df.columns[modalitiy]))
+    print("Val Loss: {:.4f} ...".format(np.mean(val_losses)),
+    "Val Acc: {:.4f} ...".format(accuracy/(len(X_test)//batch_size)/5),
+    "F1-Score: {:.4f} ...".format(f1score/(len(X_test)//batch_size)/5),
+    'removed modality during test {}'.format(test_df.columns[modalitiy]))
 
     stats.append({'Val loss' : np.mean(val_losses), 
             'Val acc': (accuracy/(len(X_test)//batch_size)/5), 
             'F1-Score': (f1score/(len(X_test)//batch_size)/5), 
-            'removed modality during test': train_df.columns[modalitiy]})
+            'removed modality during test': test_df.columns[modalitiy]})
 
-data = [[stat['removed modality during test'], stat['F1-Score']] for  stat in stats]
-table = wandb.Table(data=data, columns=["removed modality", "F1-Score"])
-run.log(
-    {
-        "train_test": wandb.plot.bar(
-            table, "removed modality", "F1-Score", title="Only Train time removal"
-        )
-    }
-)
+# data = [[stat['removed modality during test'], stat['F1-Score']] for  stat in stats]
+# table = wandb.Table(data=data, columns=["removed modality", "F1-Score"])
+# run.log(
+#     {
+#         "train_test": wandb.plot.bar(
+#             table, "removed modality", "F1-Score", title="Only Train time removal"
+#         )
+#     }
+# )
